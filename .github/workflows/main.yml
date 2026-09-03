@@ -20,14 +20,22 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          if [ -f package.json ]; then
+            npm install
+          else
+            echo "No package.json found - skipping npm install"
+          fi
 
       - name: Build web game
-        run: npm run build
+        run: |
+          if [ -f package.json ]; then
+            npm run build --if-present
+          else
+            echo "No package.json found - skipping web build"
+          fi
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -39,7 +47,13 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Make Gradle executable
-        run: chmod +x gradlew
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          else
+            echo "ERROR: gradlew file not found."
+            exit 1
+          fi
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug
@@ -48,6 +62,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: HILIM-CHILIM-APK
-          path: |
-            **/build/outputs/apk/**/*.apk
+          path: '**/build/outputs/apk/**/*.apk'
           if-no-files-found: error
