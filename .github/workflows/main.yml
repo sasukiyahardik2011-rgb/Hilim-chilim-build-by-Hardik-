@@ -1,4 +1,4 @@
-name: HILIM CHILIM - Build APK
+Name: HILIM CHILIM - Build APK
 
 on:
   push:
@@ -73,7 +73,17 @@ jobs:
             chmod +x "$CD_DIR/gradlew"
           fi
 
-      # 8. Build APK
+      # 8. Generate Default Debug Keystore
+      - name: Generate Debug Keystore
+        run: |
+          CD_DIR="${{ steps.find_project.outputs.project_dir }}"
+          mkdir -p ~/.android
+          keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          
+          # બિલ્ડમાં જો ચોક્કસ 'debug.keystore' પ્રોજેક્ટ રૂટમાં શોધતું હોય તો ત્યાં પણ કોપી કરો
+          cp ~/.android/debug.keystore "$CD_DIR/debug.keystore"
+
+      # 9. Build APK
       - name: Build Debug APK
         run: |
           cd "${{ steps.find_project.outputs.project_dir }}"
@@ -83,7 +93,7 @@ jobs:
             gradle assembleDebug --no-daemon
           fi
 
-      # 9. Locate Generated APK
+      # 10. Locate Generated APK
       - name: Locate APK
         id: locate_apk
         run: |
@@ -96,7 +106,7 @@ jobs:
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
           echo "APK generated at: $APK_PATH"
 
-      # 10. Upload Artifact
+      # 11. Upload Artifact
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
