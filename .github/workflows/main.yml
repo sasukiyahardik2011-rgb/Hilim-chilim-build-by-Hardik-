@@ -1,4 +1,4 @@
-Name: HILIM CHILIM - Build APK
+name: HILIM CHILIM - Build APK
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout
+      # 1. Checkout repository
       - name: Checkout source code
         uses: actions/checkout@v4
 
@@ -38,7 +38,6 @@ jobs:
             exit 1
           fi
           echo "zip_path=$ZIP_FILE" >> $GITHUB_OUTPUT
-          echo "Found ZIP: $ZIP_FILE"
 
       # 5. Extract ZIP
       - name: Extract ZIP
@@ -63,37 +62,60 @@ jobs:
             fi
           fi
           echo "project_dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
-          echo "Project directory: $PROJECT_DIR"
 
-      # 7. Make gradlew Executable (If present)
-      - name: Grant Execute Permission for Gradlew
+      # 7. Dummy google-services.json & Keystore Setup
+      - name: Generate Mock Configs & Keystore
         run: |
           CD_DIR="${{ steps.find_project.outputs.project_dir }}"
-          if [ -f "$CD_DIR/gradlew" ]; then
-            chmod +x "$CD_DIR/gradlew"
-          fi
-
-      # 8. Generate Default Debug Keystore
-      - name: Generate Debug Keystore
-        run: |
-          CD_DIR="${{ steps.find_project.outputs.project_dir }}"
+          
+          # 1. Generate Debug Keystore
           mkdir -p ~/.android
           keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          
-          # બિલ્ડમાં જો ચોક્કસ 'debug.keystore' પ્રોજેક્ટ રૂટમાં શોધતું હોય તો ત્યાં પણ કોપી કરો
           cp ~/.android/debug.keystore "$CD_DIR/debug.keystore"
 
-      # 9. Build APK
+          # 2. Generate Dummy google-services.json if missing
+          APP_DIR="$CD_DIR/app"
+          if [ -d "$APP_DIR" ] && [ ! -f "$APP_DIR/google-services.json" ]; then
+            echo "Creating dummy google-services.json..."
+            cat <<EOF > "$APP_DIR/google-services.json"
+            {
+              "project_info": {
+                "project_number": "1234567890",
+                "project_id": "dummy-project",
+                "storage_bucket": "dummy-project.appspot.com"
+              },
+              "client": [
+                {
+                  "client_info": {
+                    "mobilesdk_app_id": "1:1234567890:android:1234567890",
+                    "android_client_info": {
+                      "package_name": "com.example.app"
+                    }
+                  },
+                  "oauth_client": [],
+                  "api_key": [{ "current_key": "dummy_api_key" }],
+                  "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+                }
+              ],
+              "configuration_version": "1"
+            }
+          EOF
+          fi
+
+      # 8. Build APK with Headless Options (Fixes KSP Crash)
       - name: Build Debug APK
         run: |
           cd "${{ steps.find_project.outputs.project_dir }}"
+          
+          # Grant Execute permissions if gradlew exists
           if [ -f "./gradlew" ]; then
-            ./gradlew assembleDebug --no-daemon
+            chmod +x ./gradlew
+            ./gradlew assembleDebug -Djava.awt.headless=true --no-daemon
           else
-            gradle assembleDebug --no-daemon
+            gradle assembleDebug -Djava.awt.headless=true --no-daemon
           fi
 
-      # 10. Locate Generated APK
+      # 9. Locate APK
       - name: Locate APK
         id: locate_apk
         run: |
@@ -104,9 +126,8 @@ jobs:
             exit 1
           fi
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-          echo "APK generated at: $APK_PATH"
 
-      # 11. Upload Artifact
+      # 10. Upload Artifact
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
