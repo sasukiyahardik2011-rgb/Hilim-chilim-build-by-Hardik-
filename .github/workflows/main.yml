@@ -7,83 +7,153 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build HILIM CHILIM APK
     runs-on: ubuntu-latest
 
     steps:
+
+      # --------------------------------------------------
+      # 1. CHECKOUT
+      # --------------------------------------------------
       - name: Checkout source code
         uses: actions/checkout@v4
 
+
+      # --------------------------------------------------
+      # 2. FIND ZIP
+      # --------------------------------------------------
       - name: Find ZIP file
         id: find_zip
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
+          echo "Searching for ZIP file..."
+
+          ZIP_FILE=$(find . \
+            -maxdepth 3 \
+            -type f \
+            \( -iname "*.zip" -o -iname "*.ZIP" \) \
+            | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found."
+            echo "ERROR: No ZIP file found."
+            echo ""
+            echo "Files available in repository:"
+            find . -maxdepth 3 -type f
             exit 1
           fi
 
-          echo "ZIP found: $ZIP_FILE"
+          echo "ZIP file found:"
+          echo "$ZIP_FILE"
+
           echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
 
+
+      # --------------------------------------------------
+      # 3. EXTRACT ZIP
+      # --------------------------------------------------
       - name: Extract ZIP
         shell: bash
         run: |
           set -e
 
+          echo "Extracting ZIP..."
+
+          rm -rf extracted
           mkdir -p extracted
-          unzip -o "${{ steps.find_zip.outputs.zip_file }}" -d extracted
 
+          unzip -o \
+            "${{ steps.find_zip.outputs.zip_file }}" \
+            -d extracted
+
+          echo ""
           echo "ZIP extracted successfully."
-          find extracted -maxdepth 3 -type f | head -100
 
+
+      # --------------------------------------------------
+      # 4. FIND ANDROID PROJECT
+      # --------------------------------------------------
       - name: Find Android Project
         id: find_project
         shell: bash
         run: |
           set -e
 
-          PROJECT_DIR=$(find extracted -type f -name "settings.gradle" -o -name "settings.gradle.kts" | head -n 1 | xargs -r dirname)
+          echo "Searching for Android Gradle project..."
 
-          if [ -z "$PROJECT_DIR" ]; then
-            PROJECT_DIR=$(find extracted -type f -name "gradlew" | head -n 1 | xargs -r dirname)
+          PROJECT_DIR=""
+
+          SETTINGS_FILE=$(find extracted \
+            -type f \
+            \( \
+              -name "settings.gradle" \
+              -o \
+              -name "settings.gradle.kts" \
+            \) \
+            | head -n 1)
+
+          if [ -n "$SETTINGS_FILE" ]; then
+            PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           fi
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android Gradle project not found."
-            echo "Checking extracted files:"
-            find extracted -maxdepth 4 -type f
+            echo "ERROR: settings.gradle or settings.gradle.kts not found."
+
+            echo ""
+            echo "Extracted files:"
+            find extracted -maxdepth 5 -type f
+
             exit 1
           fi
 
           PROJECT_DIR=$(realpath "$PROJECT_DIR")
 
-          echo "Android project found at:"
+          echo ""
+          echo "Android project found:"
           echo "$PROJECT_DIR"
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
+
+      # --------------------------------------------------
+      # 5. JAVA 17
+      # --------------------------------------------------
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
+
+      # --------------------------------------------------
+      # 6. SETUP GRADLE
+      # --------------------------------------------------
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
 
+
+      # --------------------------------------------------
+      # 7. VERIFY PROJECT
+      # --------------------------------------------------
       - name: Verify project structure
         working-directory: ${{ steps.find_project.outputs.project_dir }}
         shell: bash
         run: |
           set -e
 
+          echo "======================================"
+          echo "ANDROID PROJECT"
+          echo "======================================"
+
+          echo ""
           echo "Project directory:"
           pwd
 
@@ -91,43 +161,153 @@ jobs:
           echo "Project files:"
           ls -la
 
-          if [ ! -f "./gradlew" ]; then
-            echo "ERROR: gradlew not found."
+          echo ""
+
+          if [ -f "settings.gradle.kts" ]; then
+            echo "Found: settings.gradle.kts"
+          elif [ -f "settings.gradle" ]; then
+            echo "Found: settings.gradle"
+          else
+            echo "ERROR: Gradle settings file not found."
             exit 1
           fi
 
-          chmod +x ./gradlew
+          if [ -f "build.gradle.kts" ]; then
+            echo "Found: build.gradle.kts"
+          elif [ -f "build.gradle" ]; then
+            echo "Found: build.gradle"
+          else
+            echo "ERROR: Root build.gradle file not found."
+            exit 1
+          fi
 
+          if [ -d "app" ]; then
+            echo "Found: app directory"
+          else
+            echo "ERROR: app directory not found."
+            exit 1
+          fi
+
+          echo ""
+          echo "Project structure verified successfully."
+
+
+      # --------------------------------------------------
+      # 8. CREATE GRADLE WRAPPER IF MISSING
+      # --------------------------------------------------
+      - name: Create Gradle Wrapper
+        working-directory: ${{ steps.find_project.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -e
+
+          echo "Checking Gradle Wrapper..."
+
+          if [ -f "./gradlew" ]; then
+            echo "gradlew already exists."
+            chmod +x ./gradlew
+          else
+            echo "gradlew not found."
+            echo "Creating Gradle Wrapper..."
+
+            gradle wrapper \
+              --gradle-version 8.13 \
+              --distribution-type bin
+
+            chmod +x ./gradlew
+
+            echo ""
+            echo "Gradle Wrapper created successfully."
+          fi
+
+          echo ""
+          echo "Gradle version:"
+          ./gradlew --version
+
+
+      # --------------------------------------------------
+      # 9. CHECK GOOGLE SERVICES
+      # --------------------------------------------------
       - name: Check Google Services
         working-directory: ${{ steps.find_project.outputs.project_dir }}
         shell: bash
         run: |
           echo "Checking Google Services..."
 
-          if find . -type f -name "google-services.json" | grep -q .; then
-            echo "google-services.json found."
+          GOOGLE_FILE=$(find . \
+            -type f \
+            -name "google-services.json" \
+            | head -n 1)
+
+          if [ -n "$GOOGLE_FILE" ]; then
+            echo "google-services.json found:"
+            echo "$GOOGLE_FILE"
           else
             echo "google-services.json not found."
-            echo "Continuing because it may not be required."
+            echo "Continuing build..."
           fi
 
+
+      # --------------------------------------------------
+      # 10. CHECK ANDROID SDK
+      # --------------------------------------------------
+      - name: Check Android SDK
+        shell: bash
+        run: |
+          set -e
+
+          echo "ANDROID_HOME:"
+          echo "$ANDROID_HOME"
+
+          echo ""
+          echo "Android SDK:"
+          ls -la "$ANDROID_HOME" | head -50
+
+          echo ""
+          echo "Java version:"
+          java -version
+
+
+      # --------------------------------------------------
+      # 11. CLEAN PROJECT
+      # --------------------------------------------------
       - name: Clean project
         working-directory: ${{ steps.find_project.outputs.project_dir }}
         shell: bash
         run: |
-          chmod +x ./gradlew
-          ./gradlew clean --no-daemon
+          set -e
 
+          chmod +x ./gradlew
+
+          ./gradlew clean \
+            --no-daemon \
+            --stacktrace
+
+
+      # --------------------------------------------------
+      # 12. BUILD DEBUG APK
+      # --------------------------------------------------
       - name: Build APK
         working-directory: ${{ steps.find_project.outputs.project_dir }}
         shell: bash
         run: |
+          set -e
+
           chmod +x ./gradlew
+
+          echo "Starting APK build..."
 
           ./gradlew assembleDebug \
             --no-daemon \
             --stacktrace
 
+          echo ""
+          echo "APK build completed."
+
+
+      # --------------------------------------------------
+      # 13. FIND APK
+      # --------------------------------------------------
       - name: Find APK
         id: find_apk
         working-directory: ${{ steps.find_project.outputs.project_dir }}
@@ -135,22 +315,50 @@ jobs:
         run: |
           set -e
 
-          APK=$(find . -type f -name "*.apk" | head -n 1)
+          echo "Searching for APK..."
+
+          APK=$(find . \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not generated."
+
+            echo ""
+            echo "Searching all build outputs:"
+            find . \
+              -type f \
+              \( \
+                -name "*.apk" \
+                -o \
+                -name "*.aab" \
+              \) \
+              -print || true
+
             exit 1
           fi
 
+          echo ""
           echo "APK found:"
           echo "$APK"
 
+          echo ""
+          echo "APK size:"
+          ls -lh "$APK"
+
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
 
+
+      # --------------------------------------------------
+      # 14. VERIFY APK
+      # --------------------------------------------------
       - name: Verify APK
         working-directory: ${{ steps.find_project.outputs.project_dir }}
         shell: bash
         run: |
+          set -e
+
           APK="${{ steps.find_apk.outputs.apk_path }}"
 
           if [ ! -f "$APK" ]; then
@@ -158,9 +366,29 @@ jobs:
             exit 1
           fi
 
-          echo "APK verified successfully."
+          FILE_SIZE=$(stat -c%s "$APK")
+
+          if [ "$FILE_SIZE" -le 0 ]; then
+            echo "ERROR: APK file is empty."
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "APK VERIFIED SUCCESSFULLY"
+          echo "======================================"
+
+          echo ""
+          echo "APK:"
+          echo "$APK"
+
+          echo ""
+          echo "Size:"
           ls -lh "$APK"
 
+
+      # --------------------------------------------------
+      # 15. UPLOAD APK
+      # --------------------------------------------------
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -168,9 +396,25 @@ jobs:
           path: ${{ steps.find_project.outputs.project_dir }}/${{ steps.find_apk.outputs.apk_path }}
           if-no-files-found: error
 
+
+      # --------------------------------------------------
+      # 16. BUILD SUMMARY
+      # --------------------------------------------------
       - name: Build Summary
+        if: success()
+        shell: bash
         run: |
-          echo "======================================"
-          echo " HILIM CHILIM APK BUILD SUCCESSFUL"
-          echo "======================================"
-          echo "APK artifact: HILIM-CHILIM-APK"
+          echo ""
+          echo "=========================================="
+          echo "     HILIM CHILIM APK BUILD SUCCESS"
+          echo "=========================================="
+          echo ""
+          echo "APK has been successfully created."
+          echo ""
+          echo "Artifact name:"
+          echo "HILIM-CHILIM-APK"
+          echo ""
+          echo "You can download the APK from:"
+          echo "Actions -> This workflow -> Artifacts"
+          echo ""
+          echo "=========================================="
