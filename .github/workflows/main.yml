@@ -37,11 +37,12 @@ jobs:
         run: |
           set -e
 
+          rm -rf extracted
           mkdir -p extracted
+
           unzip -o "${{ steps.find_zip.outputs.zip_file }}" -d extracted
 
           echo "ZIP extracted successfully."
-          find extracted -maxdepth 3 -type f | head -100
 
       - name: Find Android Project
         id: find_project
@@ -49,22 +50,26 @@ jobs:
         run: |
           set -e
 
-          PROJECT_DIR=$(find extracted -type f -name "settings.gradle" -o -name "settings.gradle.kts" | head -n 1 | xargs -r dirname)
+          PROJECT_DIR=""
 
-          if [ -z "$PROJECT_DIR" ]; then
-            PROJECT_DIR=$(find extracted -type f -name "gradlew" | head -n 1 | xargs -r dirname)
+          SETTINGS_FILE=$(find extracted -type f \( \
+            -name "settings.gradle" \
+            -o -name "settings.gradle.kts" \
+          \) | head -n 1)
+
+          if [ -n "$SETTINGS_FILE" ]; then
+            PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           fi
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: Android Gradle project not found."
-            echo "Checking extracted files:"
-            find extracted -maxdepth 4 -type f
+            find extracted -maxdepth 5 -type f
             exit 1
           fi
 
           PROJECT_DIR=$(realpath "$PROJECT_DIR")
 
-          echo "Android project found at:"
+          echo "Android project found:"
           echo "$PROJECT_DIR"
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
@@ -77,6 +82,8 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
 
       - name: Verify project structure
         working-directory: ${{ steps.find_project.outputs.project_dir }}
@@ -91,12 +98,20 @@ jobs:
           echo "Project files:"
           ls -la
 
-          if [ ! -f "./gradlew" ]; then
-            echo "ERROR: gradlew not found."
+          if [ ! -f "settings.gradle.kts" ] && \
+             [ ! -f "settings.gradle" ]; then
+            echo "ERROR: settings.gradle.kts/settings.gradle not found."
             exit 1
           fi
 
-          chmod +x ./gradlew
+          if [ ! -f "build.gradle.kts" ] && \
+             [ ! -f "build.gradle" ]; then
+            echo "ERROR: build.gradle.kts/build.gradle not found."
+            exit 1
+          fi
+
+          echo ""
+          echo "Android Gradle project structure verified."
 
       - name: Check Google Services
         working-directory: ${{ steps.find_project.outputs.project_dir }}
@@ -108,23 +123,26 @@ jobs:
             echo "google-services.json found."
           else
             echo "google-services.json not found."
-            echo "Continuing because it may not be required."
+            echo "Continuing..."
           fi
 
       - name: Clean project
         working-directory: ${{ steps.find_project.outputs.project_dir }}
         shell: bash
         run: |
-          chmod +x ./gradlew
-          ./gradlew clean --no-daemon
+          set -e
+
+          gradle clean \
+            --no-daemon \
+            --stacktrace
 
       - name: Build APK
         working-directory: ${{ steps.find_project.outputs.project_dir }}
         shell: bash
         run: |
-          chmod +x ./gradlew
+          set -e
 
-          ./gradlew assembleDebug \
+          gradle assembleDebug \
             --no-daemon \
             --stacktrace
 
@@ -139,6 +157,11 @@ jobs:
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not generated."
+
+            echo ""
+            echo "Searching build files:"
+            find . -type f | grep -E "\.(apk|aab)$" || true
+
             exit 1
           fi
 
@@ -151,6 +174,8 @@ jobs:
         working-directory: ${{ steps.find_project.outputs.project_dir }}
         shell: bash
         run: |
+          set -e
+
           APK="${{ steps.find_apk.outputs.apk_path }}"
 
           if [ ! -f "$APK" ]; then
