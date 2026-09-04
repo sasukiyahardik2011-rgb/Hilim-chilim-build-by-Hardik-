@@ -7,6 +7,9 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build HILIM CHILIM APK
@@ -14,206 +17,134 @@ jobs:
 
     steps:
 
-      # ==========================================
-      # 1. Checkout Source Code
-      # ==========================================
+      # --------------------------------------------------
+      # 1. Checkout
+      # --------------------------------------------------
       - name: Checkout source code
         uses: actions/checkout@v4
 
-
-      # ==========================================
-      # 2. Setup Java 17
-      # ==========================================
+      # --------------------------------------------------
+      # 2. Java 17
+      # --------------------------------------------------
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-
-      # ==========================================
-      # 3. Verify Java 17
-      # ==========================================
-      - name: Verify Java 17
-        shell: bash
-        run: |
-          set -e
-
-          echo "======================================"
-          echo "Java 17 Verification"
-          echo "======================================"
-
-          echo ""
-          echo "Java version:"
-          java -version
-
-          echo ""
-          echo "JAVA_HOME:"
-          echo "$JAVA_HOME"
-
-          echo ""
-          echo "Java compiler:"
-          javac -version
-
-          echo ""
-          echo "Java 17 setup completed successfully."
-
-
-      # ==========================================
-      # 4. Setup Gradle 9.3.1
-      # ==========================================
-      - name: Setup Gradle 9.3.1
-        shell: bash
-        run: |
-          set -e
-
-          GRADLE_VERSION="9.3.1"
-
-          echo "======================================"
-          echo "Installing Gradle ${GRADLE_VERSION}"
-          echo "======================================"
-
-          wget -q \
-            "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
-            -O /tmp/gradle.zip
-
-          sudo mkdir -p /opt/gradle
-
-          sudo unzip -q \
-            /tmp/gradle.zip \
-            -d /opt/gradle
-
-          echo "/opt/gradle/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
-
-          export PATH="/opt/gradle/gradle-${GRADLE_VERSION}/bin:$PATH"
-
-          echo ""
-          echo "Gradle version:"
-          gradle --version
-
-
-      # ==========================================
-      # 5. Find ZIP File
-      # ==========================================
+      # --------------------------------------------------
+      # 3. Find ZIP
+      # --------------------------------------------------
       - name: Find ZIP file
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "Searching for ZIP file"
-          echo "======================================"
+          echo "Searching for ZIP file..."
 
-          echo ""
-          echo "Repository files:"
-          find . -maxdepth 3 -type f | sort
-
-          ZIP_FILE=$(find . -maxdepth 2 -type f \
-            \( -iname "*.zip" \) \
+          ZIP_FILE=$(find "$GITHUB_WORKSPACE" \
+            -type f \
+            -iname "*.zip" \
+            -not -path "*/.git/*" \
             | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo ""
-            echo "ERROR: ZIP file was not found."
+            echo "ERROR: No ZIP file found."
             exit 1
           fi
 
-          echo ""
-          echo "ZIP file found:"
+          echo "ZIP found:"
           echo "$ZIP_FILE"
 
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-
-      # ==========================================
-      # 6. Extract ZIP
-      # ==========================================
+      # --------------------------------------------------
+      # 4. Extract ZIP
+      # --------------------------------------------------
       - name: Extract ZIP
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "Extracting ZIP"
-          echo "======================================"
+          rm -rf "$GITHUB_WORKSPACE/extracted"
+          mkdir -p "$GITHUB_WORKSPACE/extracted"
 
-          rm -rf extracted
+          echo "Extracting:"
+          echo "$ZIP_FILE"
 
-          mkdir -p extracted
+          unzip -q "$ZIP_FILE" \
+            -d "$GITHUB_WORKSPACE/extracted"
 
-          unzip -q "$ZIP_FILE" -d extracted
+          echo "Extraction completed."
 
-          echo ""
-          echo "ZIP extracted successfully."
-
-          echo ""
           echo "Extracted files:"
-          find extracted -maxdepth 5 -type f | sort | head -300
+          find "$GITHUB_WORKSPACE/extracted" -maxdepth 3 -type f \
+            | head -100
 
-
-      # ==========================================
-      # 7. Find Android Project
-      # ==========================================
+      # --------------------------------------------------
+      # 5. Find Android Project AFTER extraction
+      # --------------------------------------------------
       - name: Find Android Project
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "Finding Android Project"
-          echo "======================================"
-
           PROJECT_DIR=""
 
-          SETTINGS_FILE=$(find extracted -type f \
-            \( \
-              -name "settings.gradle" \
-              -o \
-              -name "settings.gradle.kts" \
-            \) \
+          # First preference: settings.gradle / settings.gradle.kts
+          SETTINGS_FILE=$(find "$GITHUB_WORKSPACE/extracted" \
+            -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -not -path "*/.gradle/*" \
             | head -n 1)
 
           if [ -n "$SETTINGS_FILE" ]; then
             PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           fi
 
+          # Second preference: gradlew
           if [ -z "$PROJECT_DIR" ]; then
+            GRADLEW_FILE=$(find "$GITHUB_WORKSPACE/extracted" \
+              -type f \
+              -name "gradlew" \
+              -not -path "*/.gradle/*" \
+              | head -n 1)
 
-            BUILD_FILE=$(find extracted -type f \
-              \( \
-                -name "build.gradle" \
-                -o \
-                -name "build.gradle.kts" \
-              \) \
+            if [ -n "$GRADLEW_FILE" ]; then
+              PROJECT_DIR=$(dirname "$GRADLEW_FILE")
+            fi
+          fi
+
+          # Third preference: build.gradle(.kts)
+          if [ -z "$PROJECT_DIR" ]; then
+            BUILD_FILE=$(find "$GITHUB_WORKSPACE/extracted" \
+              -type f \
+              \( -name "build.gradle" -o -name "build.gradle.kts" \) \
+              -not -path "*/.gradle/*" \
               | head -n 1)
 
             if [ -n "$BUILD_FILE" ]; then
               PROJECT_DIR=$(dirname "$BUILD_FILE")
             fi
-
           fi
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo ""
-            echo "ERROR: Android project was not found."
-            echo ""
-            echo "Searching extracted directory:"
-            find extracted -maxdepth 6 -type f | sort
+            echo "ERROR: Android project not found."
+            echo "Project structure:"
+            find "$GITHUB_WORKSPACE/extracted" -maxdepth 5 -type f \
+              | sort | head -300
             exit 1
           fi
 
-          PROJECT_DIR=$(realpath "$PROJECT_DIR")
-
-          echo ""
           echo "Android project found:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-
-      # ==========================================
-      # 8. Verify Project Structure
-      # ==========================================
+      # --------------------------------------------------
+      # 6. Verify project structure
+      # --------------------------------------------------
       - name: Verify project structure
         shell: bash
         run: |
@@ -221,69 +152,120 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "======================================"
-          echo "Project Structure"
-          echo "======================================"
-
-          echo ""
           echo "Project directory:"
           pwd
 
-          echo ""
+          echo
           echo "Project files:"
-          find . -maxdepth 3 -type f | sort | head -300
+          find . -maxdepth 3 -type f \
+            | sort \
+            | head -300
 
-          echo ""
+          echo
+          echo "Gradle files:"
+          find . -type f \
+            \( -name "settings.gradle" \
+            -o -name "settings.gradle.kts" \
+            -o -name "build.gradle" \
+            -o -name "build.gradle.kts" \
+            -o -name "gradle-wrapper.properties" \) \
+            | sort
 
-          if [ -f "settings.gradle" ]; then
-            echo "settings.gradle: FOUND"
-          elif [ -f "settings.gradle.kts" ]; then
-            echo "settings.gradle.kts: FOUND"
-          else
-            echo "WARNING: settings.gradle not found."
-          fi
-
-          if [ -f "build.gradle" ]; then
-            echo "build.gradle: FOUND"
-          elif [ -f "build.gradle.kts" ]; then
-            echo "build.gradle.kts: FOUND"
-          else
-            echo "ERROR: build.gradle not found."
-            exit 1
-          fi
-
-
-      # ==========================================
-      # 9. Create Gradle Wrapper
-      # ==========================================
-      - name: Prepare Gradle Wrapper
+      # --------------------------------------------------
+      # 7. Check Google Services
+      # --------------------------------------------------
+      - name: Check Google Services
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo "======================================"
-          echo "Preparing Gradle Wrapper"
-          echo "======================================"
+          GOOGLE_FILE=$(find . \
+            -type f \
+            -name "google-services.json" \
+            | head -n 1 || true)
 
-          gradle wrapper \
-            --gradle-version 9.3.1 \
-            --distribution-type bin
+          if [ -n "$GOOGLE_FILE" ]; then
+            echo "google-services.json found:"
+            echo "$GOOGLE_FILE"
+          else
+            echo "WARNING: google-services.json was not found."
 
-          chmod +x gradlew
+            echo
+            echo "If this app uses Firebase/Google Services,"
+            echo "you MUST add the correct google-services.json"
+            echo "to the Android app module."
+          fi
 
-          echo ""
-          echo "Gradle wrapper created."
+      # --------------------------------------------------
+      # 8. Setup Gradle 9.3.1
+      # --------------------------------------------------
+      - name: Setup Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
 
-          echo ""
-          echo "Gradle version:"
-          ./gradlew --version
+      # --------------------------------------------------
+      # 9. Prepare Gradle
+      # --------------------------------------------------
+      - name: Prepare Gradle
+        shell: bash
+        run: |
+          set -e
 
+          cd "$PROJECT_DIR"
 
-      # ==========================================
-      # 10. Clean Project
-      # ==========================================
+          echo "Java:"
+          java -version
+
+          echo
+          echo "Gradle:"
+          gradle --version
+
+          # Use wrapper if available
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            echo "Gradle wrapper found."
+            ./gradlew --version
+          else
+            echo "Gradle wrapper not found."
+            echo "Using installed Gradle 9.3.1."
+          fi
+
+      # --------------------------------------------------
+      # 10. Create debug keystore
+      # --------------------------------------------------
+      - name: Create debug keystore
+        shell: bash
+        run: |
+          set -e
+
+          KEYSTORE="$HOME/.android/debug.keystore"
+
+          mkdir -p "$HOME/.android"
+
+          if [ ! -f "$KEYSTORE" ]; then
+            keytool \
+              -genkeypair \
+              -v \
+              -keystore "$KEYSTORE" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+
+            echo "Debug keystore created."
+          else
+            echo "Debug keystore already exists."
+          fi
+
+      # --------------------------------------------------
+      # 11. Clean project
+      # --------------------------------------------------
       - name: Clean project
         shell: bash
         run: |
@@ -291,145 +273,124 @@ jobs:
 
           cd "$PROJECT_DIR"
 
-          echo "======================================"
-          echo "Cleaning Project"
-          echo "======================================"
+          rm -rf .gradle
+          rm -rf build
+          rm -rf app/build
 
-          ./gradlew clean \
-            --no-daemon \
-            --stacktrace
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew clean --no-daemon --stacktrace
+          else
+            gradle clean --no-daemon --stacktrace
+          fi
 
-
-      # ==========================================
-      # 11. Build Debug APK
-      # ==========================================
-      - name: Build Debug APK
+      # --------------------------------------------------
+      # 12. Build Debug APK
+      # --------------------------------------------------
+      - name: Build APK
         shell: bash
         run: |
           set -e
 
           cd "$PROJECT_DIR"
 
-          echo "======================================"
+          echo
+          echo "========================================"
           echo "Building Debug APK"
-          echo "======================================"
+          echo "========================================"
+          echo
 
-          ./gradlew assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            --info
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
 
+            ./gradlew \
+              assembleDebug \
+              --no-daemon \
+              --stacktrace \
+              --info
+          else
+            gradle \
+              assembleDebug \
+              --no-daemon \
+              --stacktrace \
+              --info
+          fi
 
-      # ==========================================
-      # 12. Find APK
-      # ==========================================
+      # --------------------------------------------------
+      # 13. Find APK
+      # --------------------------------------------------
       - name: Find APK
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "Searching for APK"
-          echo "======================================"
+          echo "Searching for APK..."
 
           APK_FILE=$(find "$PROJECT_DIR" \
             -type f \
-            -name "*.apk" \
-            | grep -E "/build/outputs/apk/debug/.*\.apk$" \
+            -path "*/build/outputs/apk/*.apk" \
             | head -n 1)
 
           if [ -z "$APK_FILE" ]; then
-            echo ""
-            echo "ERROR: Debug APK was not found."
+            echo "ERROR: APK not found."
 
-            echo ""
-            echo "All APK files:"
+            echo
+            echo "APK search results:"
             find "$PROJECT_DIR" \
               -type f \
-              -name "*.apk" || true
+              -name "*.apk" \
+              -print
 
             exit 1
           fi
 
-          echo ""
           echo "APK found:"
           echo "$APK_FILE"
 
-          cp "$APK_FILE" \
-            "$GITHUB_WORKSPACE/HILIM-CHILIM-debug.apk"
+          echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
 
-          echo "APK_FILE=$GITHUB_WORKSPACE/HILIM-CHILIM-debug.apk" >> "$GITHUB_ENV"
-
-
-      # ==========================================
-      # 13. Verify APK
-      # ==========================================
+      # --------------------------------------------------
+      # 14. Verify APK
+      # --------------------------------------------------
       - name: Verify APK
         shell: bash
         run: |
           set -e
 
-          echo "======================================"
-          echo "Verifying APK"
-          echo "======================================"
-
           if [ ! -f "$APK_FILE" ]; then
-            echo "ERROR: APK does not exist."
+            echo "ERROR: APK file does not exist."
             exit 1
           fi
 
-          echo ""
-          echo "APK successfully created."
+          echo "APK verification successful."
 
-          echo ""
-          echo "APK information:"
           ls -lh "$APK_FILE"
 
-          file "$APK_FILE"
+          echo
+          echo "APK SHA256:"
+          sha256sum "$APK_FILE"
 
-
-      # ==========================================
-      # 14. Upload APK
-      # ==========================================
+      # --------------------------------------------------
+      # 15. Upload APK
+      # --------------------------------------------------
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: HILIM-CHILIM-APK
+          name: HILIM-CHILIM-debug-APK
           path: ${{ env.APK_FILE }}
           if-no-files-found: error
+          retention-days: 30
 
-
-      # ==========================================
-      # 15. Build Summary
-      # ==========================================
+      # --------------------------------------------------
+      # 16. Build Summary
+      # --------------------------------------------------
       - name: Build Summary
-        if: always()
         shell: bash
         run: |
-          echo ""
-          echo "======================================"
-          echo "       HILIM CHILIM APK BUILD"
-          echo "======================================"
-
-          echo ""
-          echo "Java:"
-          java -version
-
-          echo ""
-          echo "JAVA_HOME:"
-          echo "$JAVA_HOME"
-
-          echo ""
-          echo "Project:"
-          echo "${PROJECT_DIR:-Not found}"
-
-          echo ""
-          echo "APK:"
-          if [ -f "$GITHUB_WORKSPACE/HILIM-CHILIM-debug.apk" ]; then
-            ls -lh "$GITHUB_WORKSPACE/HILIM-CHILIM-debug.apk"
-          else
-            echo "APK was not generated."
-          fi
-
-          echo ""
-          echo "======================================"
+          echo "## ✅ HILIM CHILIM APK Build" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Build completed successfully." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**APK:** HILIM-CHILIM-debug-APK" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The APK is available in the workflow Artifacts." >> "$GITHUB_STEP_SUMMARY"
