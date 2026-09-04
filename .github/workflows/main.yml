@@ -63,51 +63,65 @@ jobs:
           fi
           echo "project_dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
 
-      # 7. Dummy google-services.json & Keystore Setup
-      - name: Generate Mock Configs & Keystore
+      # 7. Dynamic Package Detection & Keystore Setup
+      - name: Generate Keystore & Auto Google Services
         run: |
           CD_DIR="${{ steps.find_project.outputs.project_dir }}"
-          
+          APP_DIR="$CD_DIR/app"
+
           # 1. Generate Debug Keystore
           mkdir -p ~/.android
           keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           cp ~/.android/debug.keystore "$CD_DIR/debug.keystore"
 
-          # 2. Generate Dummy google-services.json if missing
-          APP_DIR="$CD_DIR/app"
-          if [ -d "$APP_DIR" ] && [ ! -f "$APP_DIR/google-services.json" ]; then
-            echo "Creating dummy google-services.json..."
-            cat <<EOF > "$APP_DIR/google-services.json"
-            {
-              "project_info": {
-                "project_number": "1234567890",
-                "project_id": "dummy-project",
-                "storage_bucket": "dummy-project.appspot.com"
-              },
-              "client": [
-                {
-                  "client_info": {
-                    "mobilesdk_app_id": "1:1234567890:android:1234567890",
-                    "android_client_info": {
-                      "package_name": "com.example.app"
-                    }
-                  },
-                  "oauth_client": [],
-                  "api_key": [{ "current_key": "dummy_api_key" }],
-                  "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
-                }
-              ],
-              "configuration_version": "1"
-            }
-          EOF
+          # 2. Extract Real Package Name from Project
+          PKG_NAME=""
+          if [ -f "$APP_DIR/build.gradle" ]; then
+            PKG_NAME=$(grep -oP 'applicationId\s+["\']\K[^"\']+' "$APP_DIR/build.gradle" || true)
+          fi
+          if [ -z "$PKG_NAME" ] && [ -f "$APP_DIR/build.gradle.kts" ]; then
+            PKG_NAME=$(grep -oP 'applicationId\s*=\s*["\']\K[^"\']+' "$APP_DIR/build.gradle.kts" || true)
+          fi
+          if [ -z "$PKG_NAME" ] && [ -f "$APP_DIR/src/main/AndroidManifest.xml" ]; then
+            PKG_NAME=$(grep -oP 'package=\s*["\']\K[^"\']+' "$APP_DIR/src/main/AndroidManifest.xml" || true)
           fi
 
-      # 8. Build APK with Headless Options (Fixes KSP Crash)
+          if [ -z "$PKG_NAME" ]; then
+            PKG_NAME="com.example.app"
+          fi
+
+          echo "Detected Package Name: $PKG_NAME"
+
+          # 3. Create Valid google-services.json matching the actual Package Name
+          mkdir -p "$APP_DIR"
+          cat <<EOF > "$APP_DIR/google-services.json"
+          {
+            "project_info": {
+              "project_number": "1234567890",
+              "project_id": "dummy-project",
+              "storage_bucket": "dummy-project.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:1234567890:android:1234567890",
+                  "android_client_info": {
+                    "package_name": "$PKG_NAME"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [{ "current_key": "dummy_api_key" }],
+                "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          EOF
+
+      # 8. Build Debug APK
       - name: Build Debug APK
         run: |
           cd "${{ steps.find_project.outputs.project_dir }}"
-          
-          # Grant Execute permissions if gradlew exists
           if [ -f "./gradlew" ]; then
             chmod +x ./gradlew
             ./gradlew assembleDebug -Djava.awt.headless=true --no-daemon
@@ -115,7 +129,7 @@ jobs:
             gradle assembleDebug -Djava.awt.headless=true --no-daemon
           fi
 
-      # 9. Locate APK
+      # 9. Locate Generated APK
       - name: Locate APK
         id: locate_apk
         run: |
